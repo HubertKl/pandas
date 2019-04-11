@@ -14,7 +14,7 @@ import pytz
 
 from pandas._libs import tslib
 from pandas._libs.tslibs import iNaT, parsing
-from pandas.compat import PY3, lmap
+from pandas.compat import lmap
 from pandas.errors import OutOfBoundsDatetime
 import pandas.util._test_decorators as td
 
@@ -244,6 +244,63 @@ class TestTimeConversionFormats(object):
 
 
 class TestToDatetime(object):
+    @pytest.mark.parametrize("s, _format, dt", [
+        ['2015-1-1', '%G-%V-%u', datetime(2014, 12, 29, 0, 0)],
+        ['2015-1-4', '%G-%V-%u', datetime(2015, 1, 1, 0, 0)],
+        ['2015-1-7', '%G-%V-%u', datetime(2015, 1, 4, 0, 0)]
+    ])
+    def test_to_datetime_iso_week_year_format(self, s, _format, dt):
+        # See GH#16607
+        assert to_datetime(s, format=_format) == dt
+
+    @pytest.mark.parametrize("msg, s, _format", [
+        ["ISO week directive '%V' must be used with the ISO year directive "
+         "'%G' and a weekday directive '%A', '%a', '%w', or '%u'.", "1999 50",
+         "%Y %V"],
+        ["ISO year directive '%G' must be used with the ISO week directive "
+         "'%V' and a weekday directive '%A', '%a', '%w', or '%u'.", "1999 51",
+         "%G %V"],
+        ["ISO year directive '%G' must be used with the ISO week directive "
+         "'%V' and a weekday directive '%A', '%a', '%w', or '%u'.", "1999 "
+         "Monday", "%G %A"],
+        ["ISO year directive '%G' must be used with the ISO week directive "
+         "'%V' and a weekday directive '%A', '%a', '%w', or '%u'.", "1999 Mon",
+         "%G %a"],
+        ["ISO year directive '%G' must be used with the ISO week directive "
+         "'%V' and a weekday directive '%A', '%a', '%w', or '%u'.", "1999 6",
+         "%G %w"],
+        ["ISO year directive '%G' must be used with the ISO week directive "
+         "'%V' and a weekday directive '%A', '%a', '%w', or '%u'.", "1999 6",
+         "%G %u"],
+        ["ISO year directive '%G' must be used with the ISO week directive "
+         "'%V' and a weekday directive '%A', '%a', '%w', or '%u'.", "2051",
+         "%G"],
+        ["Day of the year directive '%j' is not compatible with ISO year "
+         "directive '%G'. Use '%Y' instead.", "1999 51 6 256", "%G %V %u %j"],
+        ["ISO week directive '%V' is incompatible with the year directive "
+         "'%Y'. Use the ISO year '%G' instead.", "1999 51 Sunday", "%Y %V %A"],
+        ["ISO week directive '%V' is incompatible with the year directive "
+         "'%Y'. Use the ISO year '%G' instead.", "1999 51 Sun", "%Y %V %a"],
+        ["ISO week directive '%V' is incompatible with the year directive "
+         "'%Y'. Use the ISO year '%G' instead.", "1999 51 1", "%Y %V %w"],
+        ["ISO week directive '%V' is incompatible with the year directive "
+         "'%Y'. Use the ISO year '%G' instead.", "1999 51 1", "%Y %V %u"],
+        ["ISO week directive '%V' must be used with the ISO year directive "
+         "'%G' and a weekday directive '%A', '%a', '%w', or '%u'.", "20", "%V"]
+    ])
+    def test_error_iso_week_year(self, msg, s, _format):
+        # See GH#16607
+        # This test checks for errors thrown when giving the wrong format
+        # However, as discussed on PR#25541, overriding the locale
+        # causes a different error to be thrown due to the format being
+        # locale specific, but the test data is in english.
+        # Therefore, the tests only run when locale is not overwritten,
+        # as a sort of solution to this problem.
+        if (locale.getlocale() != ('zh_CN', 'UTF-8') and
+           locale.getlocale() != ('it_IT', 'UTF-8')):
+            with pytest.raises(ValueError, match=msg):
+                to_datetime(s, format=_format)
+
     @pytest.mark.parametrize('tz', [None, 'US/Central'])
     def test_to_datetime_dtarr(self, tz):
         # DatetimeArray
@@ -327,11 +384,8 @@ class TestToDatetime(object):
             assert pdtoday2.tzinfo is None
 
     def test_to_datetime_today_now_unicode_bytes(self):
-        to_datetime([u'now'])
-        to_datetime([u'today'])
-        if not PY3:
-            to_datetime(['now'])
-            to_datetime(['today'])
+        to_datetime(['now'])
+        to_datetime(['today'])
 
     @pytest.mark.parametrize('cache', [True, False])
     def test_to_datetime_dt64s(self, cache):
@@ -708,7 +762,7 @@ class TestToDatetime(object):
                                   NaT], tz='UTC')
         tm.assert_index_equal(result, expected)
 
-    def test_iss8601_strings_mixed_offsets_with_naive(self):
+    def test_iso8601_strings_mixed_offsets_with_naive(self):
         # GH 24992
         result = pd.to_datetime([
             '2018-11-28T00:00:00',
@@ -730,6 +784,18 @@ class TestToDatetime(object):
         result = pd.to_datetime(items, utc=True)
         expected = pd.to_datetime(list(reversed(items)), utc=True)[::-1]
         tm.assert_index_equal(result, expected)
+
+    def test_mixed_offsets_with_native_datetime_raises(self):
+        # GH 25978
+        s = pd.Series([
+            'nan',
+            pd.Timestamp("1990-01-01"),
+            "2015-03-14T16:15:14.123-08:00",
+            "2019-03-04T21:56:32.620-07:00",
+            None,
+        ])
+        with pytest.raises(ValueError, match="Tz-aware datetime.datetime"):
+            pd.to_datetime(s)
 
     def test_non_iso_strings_with_tz_offset(self):
         result = to_datetime(['March 1, 2018 12:00:00+0400'] * 2)
